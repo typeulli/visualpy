@@ -217,7 +217,7 @@ def communicate(callback, *args, callback_closed = None, log_in_termianl: bool =
         
 
     empty_count = 0
-    while not (lineinfo := (line := proc.stdout.readline()).replace("[visual.py] ", "").strip()).startswith("lines: "):
+    while not (lineinfo := (line := proc.stdout.readline()).replace("[visualpy] ", "").strip()).startswith("lines: "):
         if log_in_termianl: terminalview_scrolledtext.insert(tk.END, line+"\n")
         if len(lineinfo) == 0: empty_count += 1
         if proc.poll() != None:
