@@ -3,6 +3,7 @@ import inspect
 import pdb
 import sys
 import pprint
+import platform
 from pathlib import Path
 from types import FrameType
 from typing import Any, cast
@@ -285,21 +286,30 @@ class Debug(pdb.Pdb):
 
     do_amu = do_args_memory_usage
 
-from ctypes import wintypes as w
 
-SW_SHOWNORMAL = 1
+def execute(target: str, arg: str, show_console: bool):
+    raise NotImplementedError("execute is not implemented. This may occured when visual.debug() is runned ignoring SystemError exception.")
 
-shell32 = ctypes.windll.shell32
-shell32.ShellExecuteA.argtypes = w.HWND, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.INT
-shell32.ShellExecuteA.restype = w.HINSTANCE
+if platform.system() == "Windows":
+    from ctypes import wintypes as w
+    shell32 = ctypes.windll.shell32
+    shell32.ShellExecuteA.argtypes = w.HWND, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.INT
+    shell32.ShellExecuteA.restype = w.HINSTANCE
+    def execute(target: str, arg: str, show_console: bool):
+        shell32.ShellExecuteA(None, b"open", target.encode(), arg.encode(), None, show_console)
+else:
+    raise SystemError(f"Failed to initialize shell execution in {platform.system()}")
 
 debugger = Debug()
 def debug(debugger_path: str, show_console = False):
     if "Visual.py-subprocess" not in sys.argv:
-        print("Running visual.py.\nEnsure argument Visual.py-subprocess is not contained originally.")
-        print("Arguments:", sys.argv)
+        print("Running visualpy.")
+        print("Ensure argument Visual.py-subprocess is not contained originally.")
         python_path = sys.orig_argv[0]
-        shell32.ShellExecuteA(None, b"open", python_path.encode(), (debugger_path + " " + " ".join(sys.argv)).encode(), None, show_console)
+        print("Python:", python_path)
+        print("Debugger:", debugger_path)
+        print("Arguments:", sys.argv)
+        execute(python_path, debugger_path + " " + " ".join(sys.argv), show_console)
         exit()
     else:
         frame = sys._getframe().f_back

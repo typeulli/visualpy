@@ -4,10 +4,19 @@ from dataclasses import dataclass
 from io import TextIOWrapper
 import subprocess
 import sys
+from types import TracebackType
+import traceback
 
-def excepthook(*args):
-    print("==========[ExceptHook]==========")
-    print(*args)
+def excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    print("ExceptHook while running visualpy_window.")
+    print("This exception may not occured by debugging program.")
+    print()
+    print(*traceback.format_exception(exc_type, exc_value, exc_traceback))
+    print()
     input("Press Enter to close")
 sys.excepthook = excepthook
 
@@ -135,7 +144,6 @@ codeview_frame.pack(fill=tk.BOTH)
 codeview_notebook = ttk.Notebook(codeview_frame)
 codeview_notebook.pack(fill=tk.BOTH, expand=True)
 codeview_stacks: list[tuple[tk.Frame, tk.Text, tk.Text, tk.Scrollbar]] = []
-codeview_will_remove: list[tk.Frame] = []
 
 
 ####################################################################################################
@@ -237,9 +245,6 @@ def refresh_frames(text: str):
         dataview_tree.delete(id_)
     dataview_tree_frame_will_remove.clear()
     
-    for frameWidget in codeview_will_remove:
-        frameWidget.destroy()
-    codeview_will_remove.clear()
     
     info = text.splitlines()
     frames: list[tuple[str, int, str]] = []
@@ -268,7 +273,7 @@ def refresh_frames(text: str):
         for i in range(len(frames), len(dataview_tree_frame_id_stack)):
             dataview_tree.item(dataview_tree_frame_id_stack[i].id, tags="frame_remove")
             dataview_tree_frame_will_remove.append(dataview_tree_frame_id_stack[i].id)
-            codeview_will_remove.append(codeview_stacks[i][0])
+            codeview_stacks[i][0].destroy()
         del dataview_tree_frame_id_stack[len(frames):]
         del codeview_stacks[len(frames):]
     
@@ -278,9 +283,9 @@ def refresh_frames(text: str):
         
         code_frame = tk.Frame(codeview_notebook)
         code_frame.pack(fill=tk.X, side=tk.BOTTOM, expand=True)
-        codeview_notebook.insert("end" if len(dataview_tree_frame_id_stack) == 1 else 0, code_frame, text=f"frame{len(dataview_tree_frame_id_stack)}")
+        codeview_notebook.insert("end", code_frame, text=f"frame{len(dataview_tree_frame_id_stack)}")
         codeview_notebook.update()
-        codeview_notebook.select(0)
+        codeview_notebook.select(len(codeview_stacks))
         
         max_line = load_codefile(frames[i][0]).count("\n")+1
         lineno_area = tk.Text(code_frame, width=max(len(str(max_line)), 3), bg="lightgray")

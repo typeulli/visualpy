@@ -1,5 +1,5 @@
-import visual
-visual.debug(str(visual.here / "visual_window.py"), True)
+import visualpy
+visualpy.debug(str(visualpy.here / "visualpy_window.py"), True)
 
 class Class():
     def __init__(self):
@@ -35,4 +35,4 @@ print_the_things(
 c = "c" 
 c = c + "d"
 
-visual.debugger.do_quit("")
+visualpy.debugger.do_quit("")
