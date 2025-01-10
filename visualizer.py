@@ -1,11 +1,13 @@
 from pathlib import Path
 from functools import lru_cache
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import TextIOWrapper
 import subprocess
 import sys
-from types import TracebackType
+from types import ModuleType, TracebackType
 import traceback
+from typing import Any, Callable, Generic, Mapping, ParamSpec, Sequence, TypeVar, cast
+
 
 def excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -20,8 +22,10 @@ def excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_trac
     input("Press Enter to close")
 sys.excepthook = excepthook
 
-path = Path(__file__).parent.resolve()
-path_icons = path / "icons"
+path_here = Path(__file__).parent.resolve()
+path_icons = path_here / "icons"
+path_licenses = path_here / "licenses"
+path_extensions = path_here / "extensions"
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -35,6 +39,8 @@ import tksvg #type: ignore
 
 root = tk.Tk()
 menubar = tk.Menu(root)
+menu_extensions = tk.Menu(menubar, tearoff=False)
+menubar.add_cascade(label="Extensions", menu=menu_extensions)
 root.title("visualpy")
 root.config(menu=menubar)
 
@@ -83,6 +89,13 @@ style_notreeborder.layout(
     [('Treeview.NoEdge.treearea', {'sticky': 'nsew'})]
 )
 style_notreeborder.configure('Treeview.NoEdge', background = "white", bd=0)
+
+style_notreeborder.map(
+    'Treeview.NoEdge',
+    background=[('selected', 'lightblue')],
+    foreground=[('selected', 'black')]
+)
+
 dataview_tree = ttk.Treeview(dataview_frame, style = "Treeview.NoEdge", columns=("type", "value",))
 dataview_tree.heading("#0", text="name")
 dataview_tree.heading("type", text="type")
@@ -106,7 +119,15 @@ class FrameInfo:
 
 dataview_tree_frame_id_stack: list[FrameInfo] = []
 dataview_tree_frame_will_remove: list[str] = []
-dataview_tree_variable_id_stack: list[dict[str, str]] = []
+
+@dataclass(frozen=True)
+class VariableInfo:
+    depth: int
+    
+    id: str
+    name: str
+    
+dataview_tree_variable_id_stack: list[VariableInfo] = []
 dataview_tree_variable_to_retag: list[tuple[str, str]] = []
 dataview_tree_variable_will_remove: list[str] = []
 
@@ -119,6 +140,19 @@ class AttributeInfo:
     id: str
     name: str
 dataview_tree_attribute_info_list: list[AttributeInfo] = []
+
+
+def idToInfo(id: str):
+    for fi in dataview_tree_frame_id_stack:
+        if fi.id == id:
+            return fi
+    for vi in dataview_tree_variable_id_stack:
+        if vi.id == id:
+            return vi
+    for ai in dataview_tree_attribute_info_list:
+        if ai.id == id:
+            return ai
+    return None
 
 
 ####################################################################################################
@@ -194,7 +228,7 @@ license_window.protocol("WM_DELETE_WINDOW", license_window.withdraw)
 license_notebook = ttk.Notebook(license_window)
 license_notebook.pack(fill=tk.BOTH, expand=True)
 license_microsoft_codicon = sttk.ScrolledText(license_window)
-license_microsoft_codicon.insert(tk.END, (path / "licenses" / "Microsoft-Codicon.txt").read_text("utf-8"))
+license_microsoft_codicon.insert(tk.END, (path_licenses / "Microsoft-Codicon.txt").read_text("utf-8"))
 license_microsoft_codicon.config(state=tk.DISABLED)
 license_notebook.add(license_microsoft_codicon, text="codicon")
 
@@ -214,7 +248,7 @@ proc = subprocess.Popen(
 )
 
 @thread
-def communicate(callback, *args, callback_closed = None, log_in_termianl: bool = False, tag: str = "system"):
+def communicate(callback: Callable[[str], Any], *args: str, callback_closed: Callable[[], Any] | None = None, log_in_termianl: bool = False, tag: str = "system"):
     assert type(proc.stdin) == TextIOWrapper
     assert type(proc.stdout) == TextIOWrapper
     move_end = terminalview_scrolledtext.yview()[1] == 1
@@ -279,7 +313,6 @@ def refresh_frames(text: str):
     
     for i in range(index, len(frames)):
         dataview_tree_frame_id_stack.append(FrameInfo(*frames[i], dataview_tree.insert("", 0, text=f"File {frames[i][0]}, line {frames[i][1]}, in {frames[i][2]}")))
-        dataview_tree_variable_id_stack.append({})
         
         code_frame = tk.Frame(codeview_notebook)
         code_frame.pack(fill=tk.X, side=tk.BOTTOM, expand=True)
@@ -302,11 +335,14 @@ def refresh_frames(text: str):
         scroll = tk.Scrollbar(code_frame)
         scroll.pack(fill=tk.Y, side=tk.LEFT)
         
-        def __ysc(first, last):
+        def __ysc(first: float, last: float):
             lineno_area.yview_moveto(first)
             scroll.set(first, last)
         code_area.config(yscrollcommand=__ysc)
-        scroll.config(command=lambda *args: (lineno_area.yview(*args), code_area.yview(*args)))
+        def __scroll_cmd(*args: tuple[Any]):
+            lineno_area.yview(*args)
+            code_area.yview(*args)
+        scroll.config(command=__scroll_cmd)
         
         codeview_stacks.append((code_frame, lineno_area, code_area, scroll))
 def getIconImage(typename: str) -> tk.PhotoImage:
@@ -344,16 +380,23 @@ def refresh_variables(text: str):
         value = info[line_index+1][sub_type+1:]
         if mode == "+":
             id_ = dataview_tree.insert(dataview_tree_frame_id_stack[frame_index].id, "end", text=name, values=(type_, value, ), image=getIconImage(type_), tags="var_add")
-            dataview_tree_variable_id_stack[frame_index][name] = id_
+            dataview_tree_variable_id_stack.append(VariableInfo(frame_index, id_, name))
             dataview_tree_variable_to_retag.append((id_, "var_keep"))
         elif mode == "*":
-            id_ = dataview_tree_variable_id_stack[frame_index][name]
-            dataview_tree.item(id_, values=(type_, value,), image=getIconImage(type_), tags="var_modify")
-            dataview_tree_variable_to_retag.append((id_, "var_keep"))
+            for vi in dataview_tree_variable_id_stack:
+                if vi.name == name:
+                    id_ = vi.id
+                    dataview_tree.item(id_, values=(type_, value,), image=getIconImage(type_), tags="var_modify")
+                    dataview_tree_variable_to_retag.append((id_, "var_keep"))
+                    break
         elif mode == "-":
-            dataview_tree.item(dataview_tree_variable_id_stack[frame_index][name], tags="var_remove")
-            dataview_tree_variable_will_remove.append(dataview_tree_variable_id_stack[frame_index][name])
-            del dataview_tree_variable_id_stack[frame_index][name]
+            for vi in dataview_tree_variable_id_stack:
+                if vi.name == name:
+                    id_ = vi.id
+                    dataview_tree.item(id_, tags="var_remove")
+                    dataview_tree_variable_will_remove.append(id_)
+                    dataview_tree_variable_id_stack.remove(vi)
+                    break
         # dataview_tree_variable_id_stack[frame_index]
         
     if move_end: dataview_tree.yview_moveto(1)
@@ -426,7 +469,7 @@ terminalview_send_button.config(command=send_command)
 
 def unselect_all_compliment():
     for c in terminalview_compliment.get_children():
-        terminalview_compliment.item(c, tag="")
+        terminalview_compliment.item(c, tags="")
 
 def move_selection_compliment(delta: int):
     global terminalview_compliment_select
@@ -449,7 +492,7 @@ def refresh_compliment(text: str = "Success"):
     if not lines[0].startswith("S"): return
     lines = lines[1:]
     
-    compliments = []
+    compliments: list[str] = []
     for i, line in enumerate(lines):
         index = line.index(" ")
         varname = line[:index]
@@ -534,24 +577,17 @@ def on_dataview_detail(event: "tk.Event[ttk.Treeview]"):
     
     target_depth = -1
     target_path = ""
-    for depth in range(len(dataview_tree_variable_id_stack)):
-        if target_depth != -1:
-            break
         
-        stack = dataview_tree_variable_id_stack[depth]
-        for name, id_ in stack.items():
-            if id_ == target:
-                target_depth = depth
-                target_path = name
-                break
+    info = idToInfo(target)
+    if type(info) == AttributeInfo:
+        target_path = info.path
+        target_depth = info.depth
+    elif type(info) == VariableInfo:
+        target_path = info.name
+        target_depth = info.depth
+    else:
+        raise AssertionError(f"target id is neither Variable or Attribute (found {type(info).__name__}).")
     
-    for attr_info in dataview_tree_attribute_info_list:
-        if target_depth != -1:
-            break
-        
-        if attr_info.id == target:
-            target_depth = attr_info.depth
-            target_path = attr_info.path
         
     if target_depth == -1:
         msgbox.showwarning("tk", "Failed to find target: "+target)
@@ -568,11 +604,8 @@ def on_dataview_close(event: "tk.Event[ttk.Treeview]"):
     is_attr_holder = False
     for depth in range(len(dataview_tree_variable_id_stack)):
         
-        stack = dataview_tree_variable_id_stack[depth]
-        for _, id_ in stack.items():
-            if id_ == target:
-                is_attr_holder = True
-                break
+        if type(idToInfo(target)) == VariableInfo:
+            is_attr_holder = True
         if is_attr_holder: break
     for attr_info in dataview_tree_attribute_info_list:
         if attr_info.id == target: is_attr_holder = True
@@ -595,6 +628,202 @@ def on_dataview_close(event: "tk.Event[ttk.Treeview]"):
         
             
 dataview_tree.bind("<<TreeviewClose>>", on_dataview_close)
+
+
+#TODO treeview menu
+# self.tree.bind("<Button-3>", self.rightclick)
+
+# def rightclick(self, event):
+#     """action in event of button 3 on tree view"""
+#     # select row under mouse
+#     iid = self.tree.identify_row(event.y)
+
+menu_treeview = tk.Menu(root, tearoff=False)
+menunn = tk.Menu(tearoff=False)
+menunn.add_command(label="A")
+menunn.add_command(label="B")
+menu_treeview.add_cascade(label="ASDF", menu=menunn)
+
+# def rightclick(self, event):
+#     """action in event of button 3 on tree view"""
+#     # select row under mouse
+#     iid = self.tree.identify_row(event.y)
+dataview_tree_context_target = tk.StringVar(dataview_tree)
+def on_dataview_right_click(event: "tk.Event[ttk.Treeview]"):
+    item = dataview_tree.identify_row(event.y)
+    if item:
+        dataview_tree_context_target.set(item)
+    if item and not any([frame.id == item for frame in dataview_tree_frame_id_stack]):
+        dataview_tree.selection_set(item)
+        menu_treeview.post(event.x_root, event.y_root)
+    else:
+        menu_treeview.unpost()
+dataview_tree.bind("<Button-3>", on_dataview_right_click)
+dataview_tree.bind("<<TreeviewSelect>>", lambda e: print(3))
+
+
+
+####################################################################################################
+@dataclass
+class Module:
+    name: str
+    displayname: str
+    menu: tk.Menu | None = field(default=None, init=False)
+    addedMenu: bool = field(default=False, init=False)
+
+def setDisplayName(module: Module, name: str):
+    module.displayname = name
+
+# NOTE : extensions area
+def createTopLevel(*args, **kwargs):
+    return tk.Toplevel(root, *args, **kwargs)
+
+def createModuleMenu(module: Module, *args, **kwargs):
+    if module.menu != None:
+        cast(tk.Menu, module.menu).config(*args, **kwargs)
+        return module.menu
+    menu = module.menu = tk.Menu(menu_extensions, *args, **kwargs)
+    return menu
+def addModuleMenu(module: Module, *args, **kwargs) -> None:
+    if not module.addedMenu:
+        if module.menu == None:
+            raise RuntimeError("Tried to add menu before create menu.")
+        else:
+            module.addedMenu = True
+            menu_extensions.add_cascade(*args, **{**kwargs, "menu":module.menu})
+    else:
+        raise RuntimeError("Already added menu.")
+
+P = ParamSpec("P")
+V = TypeVar("V")
+class EventHandler(Generic[P, V]):
+    def __init__(self, fn: Callable[P, V], order: int=0):
+        self.order = order
+        self.fn = fn
+    def getOrder(self) -> int:
+        return self.order
+    def __call__(self, *args: P.args, **kwds: P.kwargs) -> V:
+        return self.fn(*args, **kwds)
+
+__type_function = type(lambda: None)
+def eventHandler(v):
+    if type(v) == __type_function: return EventHandler(v)
+    def inner(func):
+        return EventHandler(func, v)
+    return inner
+
+
+
+class EventListener:
+    onStep: EventHandler[["EventListener", list[FrameInfo]], None]
+
+Listeners: list[EventListener] = []
+def addListener(listener: EventListener) -> None:
+    Listeners.append(listener)
+
+def mapFrame(objects: list[object]):
+    return {object.__getattribute__(obj, "__name__") : obj for obj in objects}
+
+__last_listener_count = 0
+
+
+
+
+
+print("Loading extensions...")
+extension_pathes = [path for path in path_extensions.iterdir() if path.is_file() and path.suffix == ".py"]
+print(f"Found {len(extension_pathes)} extensions.")
+
+
+for i, file in enumerate(extension_pathes):
+    print()
+    module_name = file.stem
+    print(f"{i+1} / {len(extension_pathes)} {module_name}")
+    module = Module(module_name, module_name)
+    
+    
+    _structure_item_list: list[object] = [
+        FrameInfo,
+        VariableInfo,
+        AttributeInfo,
+        idToInfo,
+        
+        
+        createTopLevel,
+        EventHandler,
+        eventHandler,
+        EventListener,
+        addListener
+    ]
+    _structure_item_dict: dict[str, object] = {
+        "setDisplayName": lambda name: setDisplayName(module, name),
+        "createModuleMenu": lambda *args, **kwargs: createModuleMenu(module, *args, **kwargs),
+        "addModuleMenu": lambda *args, **kwargs: addModuleMenu(module, *args, **kwargs),
+        
+        "getContextTarget": dataview_tree_context_target.get,
+        "addContextCascade": menu_treeview.add_cascade,
+        "addContextCheckbutton": menu_treeview.add_checkbutton,
+        "addContextCommand": menu_treeview.add_command,
+        "addContextRadiobutton": menu_treeview.add_radiobutton,
+        "addContextSeparator": menu_treeview.add_separator
+    }
+
+    class __fake_module_type(ModuleType):
+        def __init__(self):
+            self.__name__ = "structure"
+            self.__doc__ = None
+            self.__package__ = None
+            self.__loader__ = sys.__loader__
+            self.__spec__ = None
+            self.__annotations__ = {}
+            self.__file__ = str(path_here / "structure.pyi")
+            self.__cached__ = None
+            self.__class__ = type(sys)
+            for obj in _structure_item_list:
+                object.__setattr__(self, object.__getattribute__(obj, "__name__"), obj)
+            for key, value in _structure_item_dict.items():
+                object.__setattr__(self, key, value)
+    __fake_module = __fake_module_type()
+    
+    
+    def __fake_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0
+    ) -> ModuleType:
+        if name == "structure":
+            return __fake_module
+        if name == "tkinter":
+            return tk
+        if fromlist == None:
+            print(f"Importing {'.'*level}{name}")
+        else:
+            print(f"Importing {'.'*level}{name} for {' '.join(fromlist)}")
+        return __import__(name, globals, locals, fromlist, level)
+    
+    exec(
+        compile(
+            file.read_text(), 
+            str(file), 
+            "exec", 
+            optimize=2
+        ), 
+         
+        {
+            "__builtins__" : {
+                "__import__": __fake_import,
+                **{
+                    key: object.__getattribute__(__builtins__, key)
+                    for key in __builtins__.__dir__()
+                    if key not in ("__import__", "open")
+                }
+            }
+        }
+    ) # NOTE Create all globals again for security.
+    print(f"Static listener counts: {len(Listeners) - __last_listener_count}")
+    __last_listener_count = len(Listeners)
 
 root.mainloop()
 

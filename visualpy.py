@@ -28,20 +28,21 @@ def suppress_warning(function):
 
 KNOWN_UNITS = {"KB", "MB", "BYTES"}
 
+
 from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
-class FrameLoc:
+class VariableInfo:
     filename: str
     lineno: int = field(compare=False, hash=False)
     function: str
     name: str
-
+    
 class Debug(pdb.Pdb):
     def __init__(self, *args, **kwargs):
         super(Debug, self).__init__(*args, **kwargs)
         self.prompt = "[visualpy] "
-        self.data: list[dict[FrameLoc, Any]] = [] #type: ignore
+        self.data: list[dict[VariableInfo, Any]] = [] #type: ignore
         
         self.lastframe = None
         
@@ -98,7 +99,7 @@ class Debug(pdb.Pdb):
             self.message("lines: "+str(text.count("\n")+1))
             self.message(text.strip())
         except:
-            self._error_exc()
+            self._error_exc() # type: ignore
     @suppress_warning
     def do_detailall(self, arg):
         depth_str, target = arg.split()
@@ -124,7 +125,7 @@ class Debug(pdb.Pdb):
         
         text = "Success"
         
-        for key in target_object.__dir__():
+        for key in object.__dir__(target_object):
             value = object.__getattribute__(target_object, key)
             text += f"\n{key} {type(value).__name__} {'T' if type(value) in default_types else 'F'} {repr_data(value)}"
         
@@ -185,7 +186,7 @@ class Debug(pdb.Pdb):
             
         try:
             val = self._getval(target)
-            text = "Success.\n" + "\n".join([f"{k} {type(v).__name__}" for k, v in val.__dict__.items() if k.startswith(compare)])
+            text = "Success.\n" + "\n".join([f"{key} {type(object.__getattribute__(val, key)).__name__}" for key in object.__dir__(val) if key.startswith(compare)])
             text = text.strip()
             self.message("lines: "+str(text.count("\n")+1))
             self.message(text)
@@ -210,7 +211,7 @@ class Debug(pdb.Pdb):
             self.message("lines: "+str(text.count("\n")+1))
             self.message(text.strip())
         except:
-            self._error_exc()
+            self._error_exc() # type: ignore
         
     def do_frames(self, arg: str, slient: bool = False):
         
@@ -228,13 +229,13 @@ class Debug(pdb.Pdb):
             self.data.append({})
         
             
-        newData: list[dict[FrameLoc, Any]] = [{} for _ in range(frame_depth+1)]
-        delta: list[dict[FrameLoc, tuple[int, Any]]] = [{} for _ in range(max(frame_depth+1, len(self.data)))]
+        newData: list[dict[VariableInfo, Any]] = [{} for _ in range(frame_depth+1)]
+        delta: list[dict[VariableInfo, tuple[int, Any]]] = [{} for _ in range(max(frame_depth+1, len(self.data)))]
         
         for depth in range(frame_depth+1):
             frame_info = inspect.getframeinfo(cast(FrameType, frame_list[depth]))
             for key, value in cast(FrameType, frame_list[depth]).f_locals.items():
-                loc = FrameLoc(frame_info.filename, frame_info.lineno, frame_info.function, key)
+                loc = VariableInfo(frame_info.filename, frame_info.lineno, frame_info.function, key)
                 if loc in self.data[depth]:
                     if value is not self.data[depth][loc]:
                         delta[depth][loc] = (1, value)
@@ -287,7 +288,7 @@ class Debug(pdb.Pdb):
     do_amu = do_args_memory_usage
 
 
-def execute(target: str, arg: str, show_console: bool):
+def execute(target: str, arg: str, show_console: bool) -> None:
     raise NotImplementedError("execute is not implemented. This may occured when visual.debug() is runned ignoring SystemError exception.")
 
 if platform.system() == "Windows":
@@ -295,8 +296,9 @@ if platform.system() == "Windows":
     shell32 = ctypes.windll.shell32
     shell32.ShellExecuteA.argtypes = w.HWND, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.LPCSTR, w.INT
     shell32.ShellExecuteA.restype = w.HINSTANCE
-    def execute(target: str, arg: str, show_console: bool):
+    def execute_windows(target: str, arg: str, show_console: bool):
         shell32.ShellExecuteA(None, b"open", target.encode(), arg.encode(), None, show_console)
+    execute = execute_windows
 else:
     raise SystemError(f"Failed to initialize shell execution in {platform.system()}")
 

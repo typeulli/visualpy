@@ -1,5 +1,5 @@
 import visualpy
-visualpy.debug(str(visualpy.here / "visualpy_window.py"), True)
+visualpy.debug(str(visualpy.here / "visualizer.py"), True)
 
 class Class():
     def __init__(self):
