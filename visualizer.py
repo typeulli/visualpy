@@ -1,11 +1,12 @@
-from pathlib import Path
-from functools import lru_cache
 from dataclasses import dataclass, field
+from functools import lru_cache
 from io import TextIOWrapper
-import subprocess
+from pathlib import Path
+import pickle
+from subprocess import Popen, PIPE
 import sys
-from types import ModuleType, TracebackType
 import traceback
+from types import ModuleType, TracebackType
 from typing import Any, Callable, Generic, Mapping, ParamSpec, Sequence, TypeVar, cast
 
 
@@ -23,9 +24,10 @@ def excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_trac
 sys.excepthook = excepthook
 
 path_here = Path(__file__).parent.resolve()
+path_extensions = path_here / "extensions"
+path_fonts = path_here / "fonts"
 path_icons = path_here / "icons"
 path_licenses = path_here / "licenses"
-path_extensions = path_here / "extensions"
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -46,7 +48,12 @@ root.config(menu=menubar)
 
 root.option_add("*Background", "#FFFFFF")
 
-@lru_cache
+font=tkfont.Font(family=str(path_fonts / "JetBrainsMono-SemiBold.ttf"), size=11)#, slant="italic")
+root.option_add("*Font", font)
+
+####################################################################################################
+
+@lru_cache(maxsize=16)
 def _open_icon(target: str):
     return (path_icons / target).read_text()
 def _create_icon(target: str, fillcolor: str="currentColor") -> tksvg.SvgImage:
@@ -69,6 +76,20 @@ _icon_list: list[tuple[str, str]] = [
 for _register_icon_target, _fill_color in _icon_list:
     iconImage[_register_icon_target]             = _create_icon(_register_icon_target+".svg", _fill_color)
     iconImage[_register_icon_target+":disabled"] = _create_icon(_register_icon_target+".svg", "#999999")
+
+def getIconImage(typename: str) -> tk.PhotoImage:
+    if typename == "module": return iconImage["file-code"]
+    if typename == "type": return iconImage["symbol-class"]
+    if typename == "method": return iconImage["symbol-method"]
+    if typename == "builtin_function_or_method": return iconImage["symbol-method"]
+    if typename == "method-wrapper": return iconImage["symbol-method"]
+    if typename == "function": return iconImage["symbol-method"]
+    if typename == "property": return iconImage["symbol-property"]
+    if typename == "dict": return iconImage["symbol-namespace"]
+    if typename == "str": return iconImage["symbol-string"]
+    return iconImage["symbol-variable"]
+
+####################################################################################################
 
 root_grid1 = tk.Frame(root)
 root_grid1.pack(fill=tk.BOTH, side=tk.LEFT, expand=True)
@@ -123,9 +144,12 @@ dataview_tree_frame_will_remove: list[str] = []
 @dataclass(frozen=True)
 class VariableInfo:
     depth: int
+    path: str = field(init=False)
     
     id: str
     name: str
+    def __post_init__(self):
+        object.__setattr__(self, "path", self.name)
     
 dataview_tree_variable_id_stack: list[VariableInfo] = []
 dataview_tree_variable_to_retag: list[tuple[str, str]] = []
@@ -140,6 +164,7 @@ class AttributeInfo:
     id: str
     name: str
 dataview_tree_attribute_info_list: list[AttributeInfo] = []
+
 
 
 def idToInfo(id: str):
@@ -231,24 +256,32 @@ license_microsoft_codicon = sttk.ScrolledText(license_window)
 license_microsoft_codicon.insert(tk.END, (path_licenses / "Microsoft-Codicon.txt").read_text("utf-8"))
 license_microsoft_codicon.config(state=tk.DISABLED)
 license_notebook.add(license_microsoft_codicon, text="codicon")
+license_jetbrains_mono = sttk.ScrolledText(license_window)
+license_jetbrains_mono.insert(tk.END, (path_licenses / "JetBrains-JetBrainsMono.txt").read_text("utf-8"))
+license_jetbrains_mono.config(state=tk.DISABLED)
+license_notebook.add(license_jetbrains_mono, text="JetBrainsMono")
 
 menubar.add_command(label="License", command=license_window.deiconify)
 
-def thread(func):
-    return lambda *args, **kwards: root.after(1, lambda: func(*args, **kwards))
+
+P = ParamSpec("P")
+V = TypeVar("V")
+def thread(func: Callable[P, V]) -> Callable[P, None]:
+    def decorator(*args: P.args, **kwards: P.kwargs) -> None:
+        root.after(1, lambda: func(*args, **kwards))
+    return decorator
 
 argv = sys.orig_argv.copy()
 argv.pop(1)
 argv.append("Visual.py-subprocess")
-proc = subprocess.Popen(
+proc = Popen(
 	argv,
-    stdin = subprocess.PIPE,
-    stdout = subprocess.PIPE,
+    stdin = PIPE,
+    stdout = PIPE,
     text=True
 )
 
-@thread
-def communicate(callback: Callable[[str], Any], *args: str, callback_closed: Callable[[], Any] | None = None, log_in_termianl: bool = False, tag: str = "system"):
+def _communicate(callback: Callable[[str], Any], *args: str, callback_closed: Callable[[], Any] | None = None, log_in_termianl: bool = False, tag: str = "system"):
     assert type(proc.stdin) == TextIOWrapper
     assert type(proc.stdout) == TextIOWrapper
     move_end = terminalview_scrolledtext.yview()[1] == 1
@@ -272,6 +305,8 @@ def communicate(callback: Callable[[str], Any], *args: str, callback_closed: Cal
         terminalview_scrolledtext.insert(tk.END, text+"\n")
         if move_end: terminalview_scrolledtext.yview_moveto(1)
     callback(text)
+
+communicate = thread(_communicate)
     
 def refresh_frames(text: str):
     global dataview_tree_frame_id_stack, dataview_tree_variable_id_stack
@@ -345,18 +380,9 @@ def refresh_frames(text: str):
         scroll.config(command=__scroll_cmd)
         
         codeview_stacks.append((code_frame, lineno_area, code_area, scroll))
-def getIconImage(typename: str) -> tk.PhotoImage:
-    if typename == "module": return iconImage["file-code"]
-    if typename == "type": return iconImage["symbol-class"]
-    if typename == "method": return iconImage["symbol-method"]
-    if typename == "builtin_function_or_method": return iconImage["symbol-method"]
-    if typename == "method-wrapper": return iconImage["symbol-method"]
-    if typename == "function": return iconImage["symbol-method"]
-    if typename == "property": return iconImage["symbol-property"]
-    if typename == "dict": return iconImage["symbol-namespace"]
-    if typename == "str": return iconImage["symbol-string"]
-    return iconImage["symbol-variable"]
+
 def refresh_variables(text: str):
+    
     move_end = dataview_scroll.get()[1] == 1
     
     for id_, tag in dataview_tree_variable_to_retag:
@@ -401,7 +427,7 @@ def refresh_variables(text: str):
         
     if move_end: dataview_tree.yview_moveto(1)
     
-def refresh_details(text: str, targetId: str):
+def refresh_attributes(text: str, targetId: str):
     lines = text.splitlines()
     if len(lines) < 2: return
     if lines[0] != "Success": return
@@ -415,6 +441,7 @@ def refresh_details(text: str, targetId: str):
     value = line[sub_default+1:]
     
     dataview_tree.item(targetId, text=name, values=[type_, value], image=getIconImage(type_ + (":disabled" if default else "")), tags="builtin" if default else "")
+
 @lru_cache
 def load_codefile(target: str):
     print("Reading code at", target)
@@ -440,7 +467,7 @@ def step_over_handler(text):
     refresh_frames(text)
     communicate(refresh_variables, "frames", log_in_termianl=controllbar_log_in_terminal.get())
     for attr in dataview_tree_attribute_info_list:
-        func = lambda text, id_=attr.id: refresh_details(text, id_)
+        func = lambda text, id_=attr.id: refresh_attributes(text, id_)
         communicate(func, f"detail {attr.depth} {attr.path}", log_in_termianl=controllbar_log_in_terminal.get())
     communicate(refresh_codes, "seek", log_in_termianl=controllbar_log_in_terminal.get())
 def step_over():
@@ -521,7 +548,7 @@ def on_terminalview_entry_write(event: "tk.Event[tk.Entry]"):
     
     if event.char and event.char in "ABCDEFGHIJKLNMOPQRSTUVWXYZ" + "ABCDEFGHIJKLNMOPQRSTUVWXYZ".lower() + "1234567890!@#$%^&*()" + "-_=+[{]}\\|;:\'\",<.>`~":
         terminalview_entry.config(bg="#ffffff")
-    if event.keycode == 9: #tab
+    if event.keycode == 9: #NOTE tab
         text = terminalview_entry.get()
         if "." in text:
             text = text[:text.rindex(".")]
@@ -547,7 +574,7 @@ terminalview_entry.bind("<Up>", lambda _: move_selection_compliment(-1))
 terminalview_entry.bind("<Down>", lambda _: move_selection_compliment(+1))
 
 
-def create_detail(depth: int, parentPath: str, parentId: str, text: str):
+def create_attribute(depth: int, parentPath: str, parentId: str, text: str):
     if not text.startswith("S"):
         return
     lines = text.splitlines()[1:]
@@ -596,17 +623,14 @@ def on_dataview_detail(event: "tk.Event[ttk.Treeview]"):
     for attr_info in dataview_tree_attribute_info_list: # If already updated
         if attr_info.parentId == target:
             return
-    communicate(lambda text: create_detail(target_depth, target_path, target, text), f"detailall {target_depth} {target_path}", log_in_termianl=controllbar_log_in_terminal.get())
+    communicate(lambda text: create_attribute(target_depth, target_path, target, text), f"detailall {target_depth} {target_path}", log_in_termianl=controllbar_log_in_terminal.get())
 dataview_tree.bind("<Double-1>", on_dataview_detail)
 def on_dataview_close(event: "tk.Event[ttk.Treeview]"):
     global dataview_tree_attribute_info_list
     target, *_ = dataview_tree.selection()
     is_attr_holder = False
-    for depth in range(len(dataview_tree_variable_id_stack)):
-        
-        if type(idToInfo(target)) == VariableInfo:
-            is_attr_holder = True
-        if is_attr_holder: break
+    if type(idToInfo(target)) == VariableInfo:
+        is_attr_holder = True
     for attr_info in dataview_tree_attribute_info_list:
         if attr_info.id == target: is_attr_holder = True
         if is_attr_holder: break
@@ -630,24 +654,9 @@ def on_dataview_close(event: "tk.Event[ttk.Treeview]"):
 dataview_tree.bind("<<TreeviewClose>>", on_dataview_close)
 
 
-#TODO treeview menu
-# self.tree.bind("<Button-3>", self.rightclick)
-
-# def rightclick(self, event):
-#     """action in event of button 3 on tree view"""
-#     # select row under mouse
-#     iid = self.tree.identify_row(event.y)
 
 menu_treeview = tk.Menu(root, tearoff=False)
-menunn = tk.Menu(tearoff=False)
-menunn.add_command(label="A")
-menunn.add_command(label="B")
-menu_treeview.add_cascade(label="ASDF", menu=menunn)
 
-# def rightclick(self, event):
-#     """action in event of button 3 on tree view"""
-#     # select row under mouse
-#     iid = self.tree.identify_row(event.y)
 dataview_tree_context_target = tk.StringVar(dataview_tree)
 def on_dataview_right_click(event: "tk.Event[ttk.Treeview]"):
     item = dataview_tree.identify_row(event.y)
@@ -662,6 +671,14 @@ dataview_tree.bind("<Button-3>", on_dataview_right_click)
 dataview_tree.bind("<<TreeviewSelect>>", lambda e: print(3))
 
 
+
+def requestData(depth: int, target: str, serialize: bool = True) -> object:
+    var: list[str] = []
+    _communicate(var.append, "req" + ("S" if serialize else "") + " " + str(depth) + " " + target)
+    lines = var[0].splitlines()
+    if lines[0][0] == "F":
+        raise ValueError(lines[1])
+    return pickle.loads(eval(lines[1]))
 
 ####################################################################################################
 @dataclass
@@ -694,8 +711,6 @@ def addModuleMenu(module: Module, *args, **kwargs) -> None:
     else:
         raise RuntimeError("Already added menu.")
 
-P = ParamSpec("P")
-V = TypeVar("V")
 class EventHandler(Generic[P, V]):
     def __init__(self, fn: Callable[P, V], order: int=0):
         self.order = order
@@ -753,7 +768,8 @@ for i, file in enumerate(extension_pathes):
         EventHandler,
         eventHandler,
         EventListener,
-        addListener
+        addListener,
+        requestData
     ]
     _structure_item_dict: dict[str, object] = {
         "setDisplayName": lambda name: setDisplayName(module, name),

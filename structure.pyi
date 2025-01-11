@@ -18,6 +18,7 @@ class FrameInfo:
 @dataclass(frozen=True)
 class VariableInfo:
     depth: int
+    path: str
     
     id: str
     name: str
@@ -33,6 +34,10 @@ class AttributeInfo:
     name: str
 
 def idToInfo(id: str) -> FrameInfo | VariableInfo | AttributeInfo | None: ...
+
+
+def requestData(depth: int, target: str, serialize: bool = True) -> object: ...
+
 
 def setDisplayName(name: str) -> None: ...
 
@@ -244,11 +249,5 @@ def call(target: str) -> None: ...
 
 
 
-
-def dataRequest(frame: int, target: str) -> Any: ...
-
-def dataGet(frame: int, target: str) -> Any: ...
-
-def dataUnlink(frame: int, target: str) -> Any: ...
 
 

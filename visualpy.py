@@ -9,7 +9,9 @@ from types import FrameType
 from typing import Any, cast
 
 from pympler import asizeof
+import pickle
 import ctypes
+from multiprocessing.shared_memory import SharedMemory
 
 default_types = [type(None.__new__), type(None.__repr__)]
 here = Path(__file__).parent.absolute()
@@ -131,6 +133,38 @@ class Debug(pdb.Pdb):
         
         self.message("lines: "+str(text.count("\n")+1))
         self.message(text.strip())
+    
+    def do_reqS(self, arg):
+        depth_str, target = arg.split()
+        depth = int(depth_str)
+        target_path = target.split(".")
+        
+        target_object: object = None
+        found_init_object = False
+        
+        for f, v in self.data[depth].items():
+            if f.name == target_path[0]:
+                target_object = v
+                found_init_object = True
+                break
+        if not found_init_object:
+            print("lines: 2")
+            print("Failed.\n Can not find object.")
+            return
+
+        for p in target_path[1:]:
+            target_object = object.__getattribute__(target_object, p)
+        
+        try:
+            data = pickle.dumps(target_object)
+            print("lines: 2")
+            print(f"Success.\n{repr(data)}")
+        except:
+            print("lines: 2")
+            print(f"Failed.\nCan not serialize type '{type(target_object).__name__}'")
+        
+        
+        
                 
                 
     @suppress_warning
@@ -289,6 +323,7 @@ class Debug(pdb.Pdb):
 
 
 def execute(target: str, arg: str, show_console: bool) -> None:
+    
     raise NotImplementedError("execute is not implemented. This may occured when visual.debug() is runned ignoring SystemError exception.")
 
 if platform.system() == "Windows":
@@ -320,5 +355,6 @@ def debug(debugger_path: str, show_console = False):
         debugger.do_frames("", slient=True)
         debugger.set_trace(frame)
 
-
+if __name__ == "__main__":
+    raise NotImplementedError("Visualpy program is not ready yet.")
 
